@@ -1,0 +1,125 @@
+services:
+  postgres:
+    image: ankane/pgvector:v0.5.1
+    container_name: postgres
+    environment:
+      POSTGRES_DB: incidentops
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d incidentops"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      CLUSTER_ID: "MkU3OEVBNT-QRk1Xakp1TXc"
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka-data:/tmp/kafka-logs
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--list", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api-gateway:
+    build:
+      context: ./backend/api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - INCIDENT_ENGINE_HOST=incident-engine
+      - INCIDENT_ENGINE_PORT=8081
+      - AI_DIAGNOSTICS_HOST=ai-diagnostics
+      - AI_DIAGNOSTICS_PORT=8082
+    depends_on:
+      - incident-engine
+      - ai-diagnostics
+
+  incident-engine:
+    build:
+      context: ./backend/incident-engine
+      dockerfile: Dockerfile
+    container_name: incident-engine
+    ports:
+      - "8081:8081"
+    environment:
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/incidentops
+      - DATABASE_USERNAME=postgres
+      - DATABASE_PASSWORD=postgres
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  ai-diagnostics:
+    build:
+      context: ./backend/ai-diagnostics
+      dockerfile: Dockerfile
+    container_name: ai-diagnostics
+    ports:
+      - "8082:8082"
+    environment:
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/incidentops
+      - DATABASE_USERNAME=postgres
+      - DATABASE_PASSWORD=postgres
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - API_URL=http://api-gateway:8080
+    depends_on:
+      - api-gateway
+
+volumes:
+  postgres-data:
+  redis-data:
+  kafka-data:
